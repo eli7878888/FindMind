@@ -1,6 +1,3 @@
-import dotenv from 'dotenv';
-dotenv.config({ path: '.env' });
-
 import OpenAI from 'openai';
 
 export const openai = new OpenAI({
