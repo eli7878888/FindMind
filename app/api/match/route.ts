@@ -13,49 +13,30 @@ export async function POST(req: Request) {
       ${preferences.therapy_types?.join(', ') || ''}
       ${preferences.populations?.join(', ') || ''}
       ${preferences.jewish_community || ''}
+      ${preferences.gender_preference ? `${preferences.gender_preference} therapist` : ''}
     `.trim();
+
+    // If no meaningful preferences, use a generic query
+    const embeddingInput = preferencesText || 'general mental health therapy counseling';
 
     // Generate embedding for user preferences
     const embeddingResponse = await openai.embeddings.create({
       model: EMBEDDING_MODEL, // text-embedding-ada-002
-      input: preferencesText,
+      input: embeddingInput,
     });
     const userEmbedding = embeddingResponse.data[0].embedding;
 
     const supabase = getServiceSupabase();
 
-    // Build the query with filters
+    // Get ALL therapists with embeddings - let semantic search do the work!
+    // Only apply the most critical hard filters
     let query = supabase
       .from('therapists')
       .select('*')
       .not('specialization_embedding', 'is', null);
 
-    // Apply filters based on preferences
-    if (preferences.location) {
-      query = query.or(`location.ilike.%${preferences.location}%,offers_remote.eq.true`);
-    }
-
-    if (preferences.gender_preference && preferences.gender_preference !== 'no preference') {
-      query = query.eq('gender', preferences.gender_preference);
-    }
-
-    if (preferences.language) {
-      query = query.contains('languages', [preferences.language]);
-    }
-
-    if (preferences.insurance) {
-      query = query.contains('insurance_accepted', [preferences.insurance]);
-    }
-
-    if (preferences.jewish_community) {
-      query = query.eq('jewish_community', preferences.jewish_community);
-    }
-
-    if (preferences.session_format) {
-      query = query.contains('session_formats', [preferences.session_format]);
-    }
-
-    if (preferences.remote_preference) {
+    // Only apply hard filter for remote if explicitly required
+    if (preferences.remote_preference === true) {
       query = query.eq('offers_remote', true);
     }
 
@@ -70,22 +51,73 @@ export async function POST(req: Request) {
       return NextResponse.json([]);
     }
 
-    // Calculate similarity scores
+    // Calculate similarity scores with preference boosting
     const therapistsWithScores = therapists.map((therapist: Therapist) => {
-      // Calculate cosine similarity
-      const embedding = therapist.specialization_embedding;
+      // Calculate cosine similarity (base score)
+      let embedding = therapist.specialization_embedding;
       if (!embedding) return { ...therapist, match_score: 0 };
 
+      // Parse embedding if it's a string (pgvector issue)
+      if (typeof embedding === 'string') {
+        try {
+          embedding = JSON.parse(embedding);
+        } catch (e) {
+          console.error('Failed to parse embedding:', e);
+          return { ...therapist, match_score: 0 };
+        }
+      }
+
+      // Ensure embedding is an array
+      if (!Array.isArray(embedding)) return { ...therapist, match_score: 0 };
+
       const dotProduct = userEmbedding.reduce(
-        (sum: number, val: number, i: number) => sum + val * embedding[i],
+        (sum: number, val: number, i: number) => sum + val * (embedding as number[])[i],
         0
       );
       const magnitudeA = Math.sqrt(userEmbedding.reduce((sum: number, val: number) => sum + val * val, 0));
-      const magnitudeB = Math.sqrt(embedding.reduce((sum: number, val: number) => sum + val * val, 0));
+      const magnitudeB = Math.sqrt((embedding as number[]).reduce((sum: number, val: number) => sum + val * val, 0));
       const similarity = dotProduct / (magnitudeA * magnitudeB);
 
       // Convert to percentage (0-100)
-      const match_score = Math.round((similarity + 1) * 50);
+      let match_score = Math.round((similarity + 1) * 50);
+
+      // Apply preference boosts (instead of hard filters)
+      let boostScore = 0;
+
+      // Gender preference boost (case-insensitive)
+      if (preferences.gender_preference && preferences.gender_preference !== 'no preference') {
+        if (therapist.gender?.toLowerCase() === preferences.gender_preference.toLowerCase()) {
+          boostScore += 10; // 10 point boost for matching gender
+        }
+      }
+
+      // Location/remote boost
+      if (preferences.location && therapist.location?.toLowerCase().includes(preferences.location.toLowerCase())) {
+        boostScore += 5;
+      }
+
+      // Language boost
+      if (preferences.language && therapist.languages?.includes(preferences.language)) {
+        boostScore += 5;
+      }
+
+      // Insurance boost
+      if (preferences.insurance && therapist.insurance_accepted?.includes(preferences.insurance)) {
+        boostScore += 5;
+      }
+
+      // Jewish community boost
+      if (preferences.jewish_community && therapist.jewish_community === preferences.jewish_community) {
+        boostScore += 8;
+      }
+
+      // Session format boost
+      if (preferences.session_format && therapist.session_formats?.includes(preferences.session_format)) {
+        boostScore += 5;
+      }
+
+      // Apply boost but cap at 100
+      match_score = Math.min(100, match_score + boostScore);
 
       return { ...therapist, match_score };
     });

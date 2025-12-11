@@ -47,6 +47,7 @@ export interface UserPreferences {
   jewish_community?: string;
   session_format?: string;
   remote_preference?: boolean;
+  preferred_name?: string; // Search for specific therapist name
 }
 
 export interface ChatMessage {
