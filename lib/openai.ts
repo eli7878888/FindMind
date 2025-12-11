@@ -33,6 +33,7 @@ export const EXTRACTION_PROMPT = `Extract structured information from this conve
   "populations": string[] - specific populations (LGBTQ+, religious groups, etc.),
   "jewish_community": string - if mentioned: Chasidish, Yeshivish, Modern Orthodox, etc.,
   "session_format": string - individual, couples, family, or group,
-  "remote_preference": boolean - preference for remote/online therapy
+  "remote_preference": boolean - preference for remote/online therapy,
+  "preferred_name": string - if user asks for a specific therapist name (e.g., "David", "Sarah")
 }`;
 
